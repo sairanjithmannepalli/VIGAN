@@ -5,6 +5,6 @@
   "description": "Read-only project tools for the VIGAN n8n agent (Phase 1)",
   "main": "cli.js",
   "scripts": {
-    "test": "node --test __tests__"
+    "test": "node --test \"__tests__/**/*.test.js\""
   }
 }
