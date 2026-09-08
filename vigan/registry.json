@@ -1,0 +1,15 @@
+{
+  "projects": [
+    { "name": "n8n", "path": "D:\\Ai Projects\\n8n" },
+    { "name": "aiplay_project", "path": "D:\\Ai Projects\\aiplay_project" },
+    { "name": "De-duplication", "path": "D:\\Ai Projects\\De-duplication" },
+    { "name": "DevLinguist", "path": "D:\\Ai Projects\\DevLinguist" },
+    { "name": "GitWorkSpace", "path": "D:\\Ai Projects\\GitWorkSpace" },
+    { "name": "HACK", "path": "D:\\Ai Projects\\HACK" },
+    { "name": "Meeting Assist", "path": "D:\\Ai Projects\\Meeting Assist" },
+    { "name": "Product360", "path": "D:\\Ai Projects\\Product360" },
+    { "name": "SPCC", "path": "D:\\Ai Projects\\SPCC" },
+    { "name": "Vibe Coding Projects", "path": "D:\\Ai Projects\\Vibe Coding Projects" },
+    { "name": "unified_app", "path": "D:\\unified_app" }
+  ]
+}
