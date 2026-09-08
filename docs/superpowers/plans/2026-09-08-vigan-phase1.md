@@ -339,6 +339,8 @@ git commit -m "feat(vigan): add path guard to confine reads to a project root"
 - Produces: `readFile(root: string, subpath: string): {content: string, truncated: boolean, sizeBytes: number}`
 - Produces: `searchFiles(root: string, subpath: string, pattern: string): {matches: Array<{file: string, line: number, text: string}>, truncated: boolean}`
 
+**Security note (addresses a Task 2 review finding):** `isPathAllowed` only does lexical path checking, so a symlink or junction inside a project root that points outside it would otherwise be treated as "allowed." This task closes that gap two ways: (1) `assertAllowed` below re-validates with `fs.realpathSync` after the lexical check, so `listDir`/`readFile` reject any path that *resolves* outside the root even if it lexically appears inside it; (2) `searchFiles`' recursive walk skips symbolic links entirely rather than following them, so a symlinked subdirectory can never be traversed into.
+
 - [ ] **Step 1: Write the failing test**
 
 Create `vigan/__tests__/fsTool.test.js`:
@@ -390,7 +392,38 @@ test('searchFiles finds matching lines across files', () => {
   assert.ok(files.has('README.md'));
   assert.ok(files.has(path.join('src', 'index.js')));
 });
+
+test('readFile rejects a symlink that resolves outside the project root', (t) => {
+  const root = makeFixture();
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vigan-outside-'));
+  fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'top secret\n');
+  const linkPath = path.join(root, 'escape-link.txt');
+  try {
+    fs.symlinkSync(path.join(outsideDir, 'secret.txt'), linkPath, 'file');
+  } catch (err) {
+    t.skip(`cannot create symlinks on this system (${err.code}); skipping symlink-escape test`);
+    return;
+  }
+  assert.throws(() => readFile(root, 'escape-link.txt'), /outside/);
+});
+
+test('searchFiles does not follow a symlinked directory out of the project root', (t) => {
+  const root = makeFixture();
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vigan-outside-'));
+  fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'hello secret\n');
+  const linkDir = path.join(root, 'escape-dir');
+  try {
+    fs.symlinkSync(outsideDir, linkDir, 'dir');
+  } catch (err) {
+    t.skip(`cannot create symlinks on this system (${err.code}); skipping symlink-escape test`);
+    return;
+  }
+  const { matches } = searchFiles(root, '.', 'hello');
+  assert.ok(!matches.some((m) => m.file.startsWith('escape-dir')));
+});
 ```
+
+Creating symlinks on Windows can require Developer Mode or an elevated prompt; the two tests above detect that via the `EPERM`/`ENOSYS`-style error from `symlinkSync` and skip themselves with `t.skip(...)` rather than failing the suite when symlink creation isn't permitted on the machine running the tests.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -413,6 +446,13 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build']);
 function assertAllowed(root, subpath) {
   if (!isPathAllowed(subpath, root)) {
     throw new Error(`Path "${subpath}" is outside the allowed project root`);
+  }
+  const target = path.resolve(root, subpath);
+  const resolvedRoot = fs.realpathSync(root);
+  const resolvedTarget = fs.realpathSync(target);
+  const rootWithSep = resolvedRoot.endsWith(path.sep) ? resolvedRoot : resolvedRoot + path.sep;
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(rootWithSep)) {
+    throw new Error(`Path "${subpath}" resolves outside the allowed project root (symlink?)`);
   }
 }
 
@@ -456,6 +496,7 @@ function searchFiles(root, subpath, pattern) {
     for (const entry of entries) {
       if (matches.length >= MAX_SEARCH_MATCHES) return;
       if (SKIP_DIRS.has(entry.name)) continue;
+      if (entry.isSymbolicLink()) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
@@ -495,12 +536,12 @@ function searchFiles(root, subpath, pattern) {
 module.exports = { listDir, readFile, searchFiles, MAX_FILE_BYTES, MAX_SEARCH_MATCHES };
 ```
 
-`searchFiles` is a plain-text line grep (it reads each file as UTF-8); it is a Phase 1-appropriate approximation and may produce noisy matches on binary files, which is acceptable since this is a personal read-only tool, not a general-purpose search product.
+`searchFiles` is a plain-text line grep (it reads each file as UTF-8); it is a Phase 1-appropriate approximation and may produce noisy matches on binary files, which is acceptable since this is a personal read-only tool, not a general-purpose search product. `assertAllowed`'s `fs.realpathSync` calls and `walk`'s `entry.isSymbolicLink()` check together mean a symlink or junction can never be used to read or search outside a project's registered root, even if it lexically appears to be inside it.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd "D:\Ai Projects\n8n\vigan" && node --test __tests__/fsTool.test.js`
-Expected: PASS (5 tests)
+Expected: PASS (7 tests) — or 5 passing + 2 skipped if the machine doesn't permit creating symlinks (see the note under Step 1's test file); either outcome is a clean run, never a failure
 
 - [ ] **Step 5: Commit**
 
