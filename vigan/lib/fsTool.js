@@ -11,8 +11,14 @@ function assertAllowed(root, subpath) {
     throw new Error(`Path "${subpath}" is outside the allowed project root`);
   }
   const target = path.resolve(root, subpath);
-  const resolvedRoot = fs.realpathSync(root);
-  const resolvedTarget = fs.realpathSync(target);
+  let resolvedRoot;
+  let resolvedTarget;
+  try {
+    resolvedRoot = fs.realpathSync(root);
+    resolvedTarget = fs.realpathSync(target);
+  } catch {
+    throw new Error(`Path "${subpath}" does not exist`);
+  }
   const rootWithSep = resolvedRoot.endsWith(path.sep) ? resolvedRoot : resolvedRoot + path.sep;
   if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(rootWithSep)) {
     throw new Error(`Path "${subpath}" resolves outside the allowed project root (symlink?)`);

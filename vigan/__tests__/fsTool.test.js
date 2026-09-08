@@ -37,6 +37,11 @@ test('listDir rejects a path outside the project root', () => {
   assert.throws(() => listDir(root, '..'), /outside/);
 });
 
+test('readFile gives a clean error for a path that does not exist', () => {
+  const root = makeFixture();
+  assert.throws(() => readFile(root, 'nope.txt'), /does not exist/);
+});
+
 test('searchFiles finds matching lines across files', () => {
   const root = makeFixture();
   const { matches } = searchFiles(root, '.', 'hello');
