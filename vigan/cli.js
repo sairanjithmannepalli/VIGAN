@@ -12,7 +12,6 @@ function output(value) {
 
 function fail(message) {
   output({ error: message });
-  process.exitCode = 1;
 }
 
 function resolveOrFail(projects, name) {

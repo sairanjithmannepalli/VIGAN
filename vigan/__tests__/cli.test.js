@@ -41,60 +41,24 @@ test('read-file returns content for a known project', () => {
 
 test('an unknown project name returns a JSON error, not a crash', () => {
   const { registryPath } = makeFixtureRegistry();
-  let result;
-  try {
-    const stdout = execFileSync(process.execPath, [CLI_PATH, 'list-dir', 'Nope', '.'], {
-      encoding: 'utf8',
-      env: { ...process.env, VIGAN_REGISTRY_PATH: registryPath },
-    });
-    result = JSON.parse(stdout);
-  } catch (err) {
-    result = JSON.parse(err.stdout);
-  }
+  const result = runCli(['list-dir', 'Nope', '.'], registryPath);
   assert.match(result.error, /Unknown project/);
 });
 
 test('search with no pattern argument returns a clear JSON error', () => {
   const { registryPath } = makeFixtureRegistry();
-  let result;
-  try {
-    const stdout = execFileSync(process.execPath, [CLI_PATH, 'search', 'Demo', '.'], {
-      encoding: 'utf8',
-      env: { ...process.env, VIGAN_REGISTRY_PATH: registryPath },
-    });
-    result = JSON.parse(stdout);
-  } catch (err) {
-    result = JSON.parse(err.stdout);
-  }
+  const result = runCli(['search', 'Demo', '.'], registryPath);
   assert.match(result.error, /non-empty <pattern>/);
 });
 
 test('read-file with no subpath argument returns a clear JSON error', () => {
   const { registryPath } = makeFixtureRegistry();
-  let result;
-  try {
-    const stdout = execFileSync(process.execPath, [CLI_PATH, 'read-file', 'Demo'], {
-      encoding: 'utf8',
-      env: { ...process.env, VIGAN_REGISTRY_PATH: registryPath },
-    });
-    result = JSON.parse(stdout);
-  } catch (err) {
-    result = JSON.parse(err.stdout);
-  }
+  const result = runCli(['read-file', 'Demo'], registryPath);
   assert.match(result.error, /requires a <subpath>/);
 });
 
 test('list-dir with no arguments returns a clear JSON error', () => {
   const { registryPath } = makeFixtureRegistry();
-  let result;
-  try {
-    const stdout = execFileSync(process.execPath, [CLI_PATH, 'list-dir'], {
-      encoding: 'utf8',
-      env: { ...process.env, VIGAN_REGISTRY_PATH: registryPath },
-    });
-    result = JSON.parse(stdout);
-  } catch (err) {
-    result = JSON.parse(err.stdout);
-  }
+  const result = runCli(['list-dir'], registryPath);
   assert.match(result.error, /requires a <projectName>/);
 });
