@@ -1,45 +1,49 @@
-# VIGAN — Multi-Provider LLM Failover (Bedrock / Anthropic / OpenRouter)
+# VIGAN — LLM Provider Resilience (Bedrock / Anthropic / OpenRouter)
 
-**Date:** 2026-09-09
+**Date:** 2026-09-09 (amended 2026-09-10)
 **Status:** Approved for planning
 **Owner:** Sai Ranjith Prasad (sairanjith.mannepalli@innovapptive.com)
 **Extends:** `docs/superpowers/specs/2026-09-08-vigan-design.md` (Phase 1 read-only VIGAN) — specifically Task 7 (`VIGAN Agent Core`) and Task 10 (`VIGAN - Email Watcher`'s `Classify Importance` step) of `docs/superpowers/plans/2026-09-08-vigan-phase1.md`.
 
 ## Purpose
 
-The original Phase 1 design hardcodes a single LLM credential (`Anthropic - VIGAN`) for both the main chat/Slack agent and the email-importance classifier. This addendum replaces that single-provider dependency with automatic failover across three providers, driven by:
+The original Phase 1 design hardcodes a single LLM credential (`Anthropic - VIGAN`) for both the main chat/Slack agent and the email-importance classifier. This addendum originally set out to replace that with automatic failover across three providers (cost/rate-limit spreading, model variety, using already-available credentials, redundancy). In practice, both additional providers hit real blockers during implementation — see the two amendments below — so **the final scope of this pass is: `VIGAN Agent Core` stays single-provider (Anthropic), but gains a clean failure message instead of crashing/hanging when Anthropic itself fails.** Both Bedrock and OpenRouter are documented as deferred future work rather than abandoned outright.
 
-- **Cost / rate limits** — spread usage, avoid getting stuck when one provider throttles.
-- **Model variety** — different underlying models per provider rather than the same model through three transports.
-- **Existing credentials/credits** — use API access already available across AWS, Anthropic, and OpenRouter.
-- **Redundancy/failover** — VIGAN keeps answering even if one or two providers are down.
+## Amendment history
 
-## Provider priority and models
+> **Amendment (2026-09-09): Bedrock deferred.** Bedrock access turned out to require company-issued temporary/rotating AWS SSO credentials (session tokens that expire every 1–12 hours), which makes it impractical as a reliably-available provider for now. See "Deferred: adding Bedrock later" below.
 
-> **Amendment (2026-09-09):** Bedrock access turned out to require company-issued temporary/rotating AWS SSO credentials (session tokens that expire every 1–12 hours), which makes it impractical as a reliably-available provider for now. **Bedrock is deferred** — the initial build is a **2-provider chain**, Anthropic → OpenRouter. Bedrock can be added later as a third branch (see "Deferred: adding Bedrock later" below) once the credential-refresh situation is sorted, without changing anything about the Anthropic/OpenRouter branches already built.
+> **Amendment (2026-09-10): OpenRouter deferred too.** While implementing the Anthropic → OpenRouter chain, the OpenRouter branch (model: Muse Spark 1.3) failed tool calls with `Received tool input did not match expected schema` — it correctly omitted fields that don't apply to the chosen action (e.g. `projectName`/`subpath`/`pattern`/`limit` when calling `list-projects`), but n8n's `Call n8n Workflow Tool` node currently has **no way to mark a Workflow Input field as optional** — every field defined on the sub-workflow's trigger is treated as required in the schema handed to the model, regardless of `$fromAI()` default values (a confirmed, currently-unresolved n8n platform limitation, not a VIGAN configuration bug). Claude/Anthropic happened to always populate every field anyway, masking this gap — Muse Spark 1.3 did not. Rather than keep fighting a platform limitation, OpenRouter is deferred alongside Bedrock. See "Deferred: adding OpenRouter later" below.
 
-Automatic failover (as currently being built) tries providers in this order, stopping at the first success:
+## Current scope: single-provider Anthropic with a clean failure message
 
-1. **Anthropic direct** — Claude Sonnet 5 — primary.
-2. **OpenRouter** — Muse Spark 1.3 — fallback, deliberately a non-Claude model so an Anthropic-side outage doesn't take down both providers at once. (OpenRouter model IDs are typically `vendor/model-name` — confirm the exact catalog slug for this model in the OpenRouter dashboard when configuring the OpenAI Chat Model node, since the marketing name and API slug can differ.)
+`VIGAN Agent Core`'s AI Agent node (`Agent - Anthropic`, Claude Sonnet 5) keeps its **Retry On Fail = 1** setting and **On Error = Continue Using Error Output**, wired to a terminal `Agent Unavailable` node, so a persistent Anthropic failure (auth error, rate limit, outage) produces:
 
-### Deferred: adding Bedrock later
+```
+VIGAN's AI backend is unavailable right now: <error message>
+```
 
-Once a workable Bedrock credential story exists (either a company process for keeping a temporary-credential n8n credential refreshed, or a switch to a long-lived IAM user if your company allows it), Bedrock — Claude Sonnet (via AWS Bedrock's model catalog) — can be inserted as a third branch. Priority position (before Anthropic to make it primary again, or after Anthropic as an extra fallback before OpenRouter) is a small decision to make at that time; nothing about the Anthropic/OpenRouter branches needs to change either way, since each branch is an independent error-output chain link.
+instead of a silent hang or a raw n8n error surfaced to the chat/Slack user. This is strictly better than the original Phase 1 plan's Task 7 (which had no error handling at all), at effectively no added complexity, even though it isn't true multi-provider failover.
 
-If a provider errors (auth failure, rate limit, timeout, outage), VIGAN retries that same provider once, then — if it still fails — automatically moves to the next provider in the list, with no user-visible interruption beyond added latency. Only if all three fail does VIGAN surface an error to the user (chat/Slack) or, for the email classifier, fail closed (skip the alert rather than crash or false-alert).
+The email classifier (Task 10, not yet built as of this amendment) follows the same pattern once built: single Anthropic `Basic LLM Chain` node, Retry On Fail = 1, error output feeding into the existing `Parse Classification` node — which already fails closed (`important: false`) on anything it can't parse, including an error-shaped item with no `text`/`output` field. No multi-provider chain needed there either.
 
-## Credentials (extends plan Task 11 steps 6–7)
+## Deferred: adding Bedrock later
+
+Once a workable Bedrock credential story exists (either a company process for keeping a temporary-credential n8n credential refreshed, or a switch to a long-lived IAM user if your company allows it), Bedrock — Claude Sonnet (via AWS Bedrock's model catalog) — can be inserted as a second branch, chained off `Agent - Anthropic`'s error output (in place of the current direct-to-`Agent Unavailable` wiring). It would reuse the same shared Memory/Tool sub-nodes and `Load Config` expression as the Anthropic branch. Since Bedrock traffic goes through n8n's native **AWS Bedrock Chat Model** node (not the `Call n8n Workflow Tool` schema mechanism used for OpenRouter), it is not expected to hit the same required-field limitation described below — but this should be verified in practice once it's actually built, not assumed.
+
+## Deferred: adding OpenRouter later
+
+OpenRouter can be revisited once either (a) n8n ships proper optional-parameter support for `$fromAI()`/Workflow Inputs (tracked as a known community feature request, unresolved as of this writing), or (b) a different integration approach sidesteps the schema issue — e.g. a single `$fromAI()` argument carrying a JSON-encoded object (avoiding per-field required-ness entirely) that `Build CLI Command` parses, or restricting the OpenRouter branch to a model with strong, well-tested function-calling adherence to always-populate-every-field behavior (would need to be verified empirically per model, not assumed from a provider's marketing claims). Whichever approach is chosen, this is a small, self-contained follow-up — it does not require touching the Anthropic branch, `Load Config`, or the shared Memory/Tool sub-nodes.
+
+## Credentials
 
 | Credential name | n8n credential type | What you provide | Notes |
 |---|---|---|---|
-| `Anthropic - VIGAN` | Anthropic API | API key | Unchanged from the original Phase 1 plan. |
-| `OpenRouter - VIGAN` | OpenAI API (generic) | API key, Base URL = `https://openrouter.ai/api/v1` | OpenRouter has no dedicated n8n node; its API is OpenAI-schema-compatible, so the generic OpenAI Chat Model node is reused with the Base URL overridden. |
-| `Bedrock - VIGAN` (deferred) | AWS | Access Key ID, Secret Access Key, Session Token, region | Not created in this pass — see "Deferred: adding Bedrock later" above. Would require a one-time AWS Bedrock console step (enable model access for Claude Sonnet in that region) plus a process for refreshing the temporary session-token credential before it expires. |
+| `Anthropic - VIGAN` | Anthropic API | API key | Unchanged from the original Phase 1 plan. Currently the only provider in active use. |
+| `OpenRouter - VIGAN` | OpenAI API (generic) | API key, Base URL = `https://openrouter.ai/api/v1` | Created during this pass but not currently wired into any workflow — deferred, see above. Note: n8n 2.x also offers a **native "OpenRouter" credential type** (distinct from the generic OpenAI API + Base URL override approach originally assumed here) — if/when OpenRouter is revisited, prefer the native `OpenRouter Chat Model` node + native `OpenRouter` credential type over this generic one. |
+| `Bedrock - VIGAN` (deferred) | AWS | Access Key ID, Secret Access Key, Session Token, region | Not created in this pass — see "Deferred: adding Bedrock later" above. |
 
 ## Architecture: `VIGAN Agent Core` (replaces plan Task 7, Steps 2–4)
-
-n8n's AI Agent node accepts only one connected chat-model input at a time, so failover across providers is built as a **sequential error-output chain** of three AI Agent nodes, not one node with three models:
 
 ```
 Execute Workflow Trigger (sessionId, message)
@@ -48,36 +52,37 @@ Execute Workflow Trigger (sessionId, message)
    Load Config (Set node: systemPrompt — single source of truth)
         │
         ▼
-AI Agent [Anthropic: Claude Sonnet 5]    ──success──▶ Format Reply
+AI Agent - Anthropic [Claude Sonnet 5]    ──success──▶ Format Reply
         │ error (after 1 retry)
         ▼
-AI Agent [OpenRouter: Muse Spark 1.3]    ──success──▶ Format Reply
-        │ error (after 1 retry)
-        ▼
-   Format Reply (final message: "VIGAN's AI backends are all unavailable right now: <last error>")
+   Agent Unavailable ("VIGAN's AI backend is unavailable right now: <error>")
 ```
 
 Implementation details:
 
-- Each AI Agent node: **Retry On Fail = 1**, then **On Error = Continue Using Error Output**, whose error output connects to the next provider's AI Agent node (or, for the OpenRouter node, to the final `Format Reply` carrying the all-providers-failed message).
-- Both AI Agent nodes share the **same Memory node** (Window Buffer Memory, session-keyed on `{{$json.sessionId}}`, context window 20 — unchanged from the original Task 7) and the **same `read_project` Call n8n Workflow Tool node** (pointing at `VIGAN Tool - Project Reader`, Task 6, unchanged). A single Memory or Tool sub-node's output can fan out to multiple AI Agent nodes, so these are not duplicated. (This same fan-out approach is how a future Bedrock branch would reuse them too.)
-- The **system prompt** (unchanged text from the original Task 7 Step 2) lives once in the `Load Config` Set node and is referenced by expression — `{{$('Load Config').item.json.systemPrompt}}` — in both AI Agent nodes' System Message field, so the persona/constraints text cannot drift out of sync between providers.
-- **Known limitation:** if a provider fails *after* it has already made a tool call mid-turn, the next provider re-runs the whole agent turn from scratch. This is harmless since `read_project` is read-only — it costs one redundant tool call, not a correctness issue.
+- `Agent - Anthropic`: **Retry On Fail = 1**, **On Error = Continue Using Error Output**, whose error output connects to `Agent Unavailable` (a Set node producing the same `reply` field shape as `Format Reply`, so downstream consumers — `VIGAN - Chat`, `VIGAN - Slack` — don't need to know which path fired).
+- The **system prompt** (unchanged text from the original Task 7 Step 2) lives once in the `Load Config` Set node and is referenced by expression — `{{$('Load Config').item.json.systemPrompt}}` — in the AI Agent's System Message field, rather than being pasted inline, so a future second provider branch can reuse it without drift.
+- Prompt/Memory-Key expressions reference the trigger node **by name** (`{{$('When Executed by Another Workflow').item.json.message}}`, etc.) rather than relying on pass-through from `Load Config`, because n8n's "Edit Fields" (Set) node only keeps the fields it explicitly sets by default — it does not pass through the trigger's original `sessionId`/`message` fields alongside the new `systemPrompt` field.
+- The Memory sub-node (Simple Memory — the current n8n display name for what's referred to elsewhere as Window Buffer Memory) uses `{{$('When Executed by Another Workflow').item.json.sessionId}}` as its Key, with Context Window Length 20.
+- The `read_project` Tool sub-node (`Call n8n Workflow Tool`, pointing at `VIGAN Tool - Project Reader`) is built with an explicit Workflow Input Schema (5 fields: `action`, `projectName`, `subpath`, `pattern`, `limit`, all defined on the target workflow's trigger and mapped via `$fromAI()`), rather than left on the trigger's default "Accept All Data" passthrough — the schema is required for the AI Agent's tool-call arguments to actually reach `Build CLI Command` correctly (see "Implementation notes" below).
 
-## Architecture: email classifier (replaces plan Task 10, Step 3)
+## Implementation notes (discovered while building, not originally in scope but load-bearing)
 
-`Classify Importance` becomes two chained **Basic LLM Chain** nodes in the same priority order (Anthropic → OpenRouter), wired with the same Retry-On-Fail-1-then-error-output pattern. The classification prompt text (unchanged from the original Task 10 Step 3) is likewise sourced once from a `Load Config` node and referenced by expression in both nodes, so it can't drift between providers.
-
-Both success paths, and the final both-providers-failed path, feed into the existing `Parse Classification` Code node (Task 10 Step 4), which already fails closed (`important: false` on anything unparsable). Consequence: if both providers are down during a scheduled run, the email is silently skipped — no alert, no crash — consistent with Phase 1's existing "fail closed, never spam a false alert" behavior.
+- **`vigan/cli.js` was changed to always exit 0.** It originally set `process.exitCode = 1` on error (returning a `{error: ...}` JSON body either way) — standard Unix convention. n8n's Execute Command node (used by `VIGAN Tool - Project Reader`'s `Run CLI` step) treats any non-zero exit as a hard node failure and does not reliably pass stdout through in that case, which broke the tool's error-reporting contract when embedded in n8n. Since errors are already communicated via the JSON body, the exit code was redundant. `vigan/__tests__/cli.test.js` was updated accordingly (see commit `4b5ad5435b`).
+- **n8n 2.x disables the Execute Command node by default** (a real security control — arbitrary shell execution). It requires setting the environment variable `NODES_EXCLUDE=[]` (User scope) and a full restart of the terminal application (not just re-running the command in an already-open terminal/tab, which does not pick up new environment variables) before the node appears in the node panel.
+- **n8n 2.x requires sub-workflows to be Published (not just saved)** before they can be invoked via `Call n8n Workflow Tool` or `Execute Workflow` — contrary to the original Phase 1 plan's assumption ("leave inactive, only invoked as a sub-workflow"). Every workflow invoked this way (`VIGAN Tool - Project Reader`, `VIGAN Agent Core` once Chat/Slack call it) must be Published.
+- **n8n 2.x replaced the workflow Active/Inactive toggle with a "Publish" button** in the editor's top-right area.
+- Several AI Agent node parameters (Prompt/User Message, Memory's Session ID/Key) present as a **mode-selector dropdown** ("Connected Chat Trigger Node" vs. "Define below") separate from the actual value field — switching the dropdown itself into expression mode does not satisfy the "parameter is required" validation; you must select "Define below" as a literal dropdown choice first, which reveals a separate field to enter the expression into.
 
 ## Validation additions (extends plan Task 12)
 
-- Force an Anthropic auth failure (e.g. temporarily invalid API key) and confirm chat/Slack still gets a reply, now served by OpenRouter.
-- Force both Anthropic and OpenRouter to fail and confirm the user sees the clear "VIGAN's AI backends are all unavailable" message rather than a silent hang or a raw n8n error.
-- Confirm the email classifier silently skips (no alert, no crash) when both providers are down during a scheduled run.
+- Force an Anthropic auth failure (e.g. temporarily invalid API key) and confirm chat gets the clean `Agent Unavailable` message rather than a silent hang or raw n8n error. (Confirmed working during this pass.)
+- Confirm normal operation (valid credential) still returns a correct reply after the error-path wiring was added. (Confirmed working during this pass.)
+- Once the email classifier (Task 10) is built: confirm it silently skips (no alert, no crash) when Anthropic is down during a scheduled run, consistent with `Parse Classification`'s existing fail-closed behavior.
 
 ## Out of scope
 
-- Automatic detection of *which* error types are worth retrying vs. not (e.g. a malformed-tool-call error will fail identically on every provider) — Phase 1 treats any error as failover-worthy, accepting the small cost of a doomed retry against the remaining provider in that case.
-- Persisting/synchronizing conversation memory access patterns beyond what n8n's Window Buffer Memory already provides across the AI Agent nodes sharing one Memory sub-node.
-- Any provider beyond Anthropic and OpenRouter (Bedrock deferred — see above), or user-facing runtime provider selection (e.g. "always use OpenRouter" as a chat command) — priority order is fixed at build time in this phase.
+- True multi-provider automatic failover — deferred in full per the amendments above. What's built now is single-provider-with-clean-failure-message, not failover.
+- Automatic detection of *which* error types are worth retrying vs. not — treated as out of scope regardless of provider count.
+- Persisting/synchronizing conversation memory across multiple providers — moot while single-provider.
+- User-facing runtime provider selection (e.g. "always use OpenRouter" as a chat command).
