@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a read-only personal assistant, VIGAN, reachable from a local chat UI and from Slack, that can answer questions about a fixed list of D-drive projects (files, git status/log/diff) and proactively alerts one Slack user about important Gmail messages.
+**Goal:** Build a read-only personal assistant, VIGAN, reachable from a local chat UI, that can answer questions about a fixed list of D-drive projects (files, git status/log/diff) and proactively emails an alert about important Gmail messages. (Originally also reachable from Slack — dropped 2026-09-10, see Task 9.)
 
-**Architecture:** A small, fully unit-tested Node.js CLI (`vigan/`) implements the only allowed capability — read-only filesystem and git access scoped to a project registry — and is invoked as a subprocess. Self-hosted n8n (installed standalone, not the source checkout in this repo) provides the orchestration: one shared "Agent Core" sub-workflow (AI Agent + memory + a tool that shells out to the CLI) is called by both a local Chat Trigger workflow and a Slack Trigger workflow, plus a separate scheduled workflow that polls Gmail read-only and pushes Slack alerts.
+**Architecture:** A small, fully unit-tested Node.js CLI (`vigan/`) implements the only allowed capability — read-only filesystem and git access scoped to a project registry — and is invoked as a subprocess. Self-hosted n8n (installed standalone, not the source checkout in this repo) provides the orchestration: one shared "Agent Core" sub-workflow (AI Agent + memory + a tool that shells out to the CLI) is called by a local Chat Trigger workflow, plus a separate scheduled workflow that polls Gmail read-only and emails an alert to the user.
 
-**Tech Stack:** Node.js (>=18, built-in `node:test` runner, zero npm dependencies), self-hosted n8n (standalone install), Anthropic Claude (via n8n's Anthropic credential), Slack app/bot, Gmail OAuth2 (readonly scope).
+**Tech Stack:** Node.js (>=18, built-in `node:test` runner, zero npm dependencies), self-hosted n8n (standalone install), Anthropic Claude (via n8n's Anthropic credential), Gmail OAuth2 (readonly scope), SMTP (email-to-self alerts).
 
 ## Global Constraints
 
 - Phase 1 is strictly read-only: no file writes, no script/build/test execution, no git-mutating commands, no Gmail send/delete/label mutation. (spec: "Phase 1 (Read-Only)")
 - All project access must be confined to the paths listed in the project registry — nothing outside those roots is readable. (spec: "Project Registry", "Read-only project tool")
-- All Slack messages (inbound handling, outbound sends) are restricted to exactly one allow-listed Slack user: Sai Ranjith Prasad. Never a channel, never any other user. (spec: "Slack integration")
-- VIGAN is a single agent/persona everywhere (local chat and Slack) — no separate "Ganesh" identity. (spec: "Purpose")
+- ~~All Slack messages...~~ — Slack dropped from scope 2026-09-10 (spec: "Slack integration" amendment).
+- VIGAN is a single agent/persona — no separate "Ganesh" identity. (spec: "Purpose")
 - Email checking only happens while the local machine is awake and n8n is running — achieved by running n8n as a local, login-started process, not a cloud/always-on service. (spec: "Platform")
 - Node.js must be >= 18 (required for the built-in `node:test` module used by all unit tests below).
 - The existing n8n source checkout at `D:\Ai Projects\n8n\n8n` is NOT used to run VIGAN and is left untouched; VIGAN runs on a standalone n8n install (see Task 11).
@@ -1046,9 +1046,11 @@ Saved/published as `VIGAN - Chat`.
 
 ---
 
-### Task 9: n8n "VIGAN - Slack" workflow (Slack entry point, single-recipient allow-list)
+### Task 9: n8n "VIGAN - Slack" workflow — ❌ DROPPED from scope (2026-09-10)
 
-**Depends on:** Task 7, a Slack app/bot credential (Task 11, step 5), and the `VIGAN_SLACK_ALLOWED_USER_ID` environment variable (Task 11, step 3).
+**Why:** n8n's Slack Trigger node requires a classic webhook (a public HTTPS URL Slack's servers can reach), not Socket Mode. Two tunnel attempts failed: switching from the company Slack workspace to a private personal one didn't help (the blocker is technical, not policy-about-visibility); ngrok was installed and updated to latest, but its executable was blocked from running by this machine's corporate endpoint security (Access denied, no Mark-of-the-Web, correct file permissions — consistent with an EDR/AppLocker-style block); a Cloudflare Tunnel attempt also failed (installer needed interactive UAC not available in-session). Treated as a **blanket policy against tunneling tools on this machine** rather than something to keep working around. A Slack app, n8n credential, and in-progress workflow were created and rolled back twice; `VIGAN_SLACK_ALLOWED_USER_ID` was unset both times. See `docs/superpowers/specs/2026-09-08-vigan-design.md`'s 2026-09-10 amendment. If ever revisited: check with IT about an approved tunneling tool, or consider a hosted/cloud n8n instance instead of local.
+
+**Depends on:** Task 7, a Slack app/bot credential (Task 11, step 5 — dropped), and the `VIGAN_SLACK_ALLOWED_USER_ID` environment variable (Task 11, step 3 — dropped).
 
 - [ ] **Step 1: Create the workflow and trigger**
 
@@ -1088,9 +1090,11 @@ Save as `VIGAN - Slack`.
 
 ---
 
-### Task 10: n8n "VIGAN - Email Watcher" workflow (read-only Gmail polling + Slack alert)
+### Task 10: n8n "VIGAN - Email Watcher" workflow (read-only Gmail polling + email-to-self alert)
 
-**Depends on:** a Gmail OAuth2 credential scoped to `gmail.readonly` (Task 11, step 7) and the Slack bot credential (Task 11, step 5).
+**Note (2026-09-10):** originally designed to alert via Slack; since Slack was dropped (Task 9), Step 5 below now sends the alert as an email to the user's own inbox instead — Gmail polling itself is outbound-only (n8n calling Google's API on a schedule) and was never affected by the Slack tunnel blocker.
+
+**Depends on:** a Gmail OAuth2 credential scoped to `gmail.readonly` (Task 11, step 7).
 
 - [ ] **Step 1: Create the workflow and trigger**
 
@@ -1132,12 +1136,13 @@ try {
 
 This fails closed: any parsing problem defaults to `important: false`, so a malformed model response never causes a spurious alert.
 
-- [ ] **Step 5: Alert on important mail**
+- [ ] **Step 5: Alert on important mail (email-to-self via SMTP)**
 
-Add an **IF** node `Is Important` on `{{$json.important}}` **is true**. On the true branch, add a **Slack** node `Send Alert`:
-- **Credential**: `Slack - VIGAN Bot`
-- **Channel**: the DM channel with the allow-listed user (use the same channel ID resolution as Task 9, or hardcode the DM channel ID once known from a prior Slack Trigger event)
-- **Text**: `📧 Possibly important email from {{$json.from}}: "{{$json.subject}}" — {{$json.reason}}`
+Add an **IF** node `Is Important` on `{{$json.important}}` **is true**. On the true branch, add a **Send Email** node `Send Alert`:
+- **Credential**: `SMTP - VIGAN Alerts` (see Task 11 for setup — an SMTP app-password credential, kept entirely separate from the read-only Gmail API credential, so the Gmail credential never gains send capability)
+- **From Email** / **To Email**: your personal email address (sending to yourself)
+- **Subject**: `VIGAN: possibly important email from {{$json.from}}`
+- **Text**: `Subject: "{{$json.subject}}" — {{$json.reason}}` (no emoji — user preference)
 
 Leave the false branch unconnected.
 
@@ -1145,7 +1150,7 @@ Connect: Schedule Trigger → Get Recent Mail → Classify Importance → Parse 
 
 - [ ] **Step 6: Activate and verify**
 
-Activate the workflow. Wait for (or manually execute) one run and confirm in the n8n execution log that unimportant mail produces no Slack message, and — using a deliberately urgent-sounding test email sent to yourself — that an important one does produce a Slack alert.
+Activate the workflow. Wait for (or manually execute) one run and confirm in the n8n execution log that unimportant mail produces no email, and — using a deliberately urgent-sounding test email sent to yourself — that an important one does produce an alert email in your inbox.
 
 - [ ] **Step 7: Save**
 
@@ -1175,13 +1180,9 @@ n8n blocks `{{$env...}}` expressions in nodes by default. Set a system environme
 [Environment]::SetEnvironmentVariable('N8N_BLOCK_ENV_ACCESS_IN_NODE', 'false', 'User')
 ```
 
-- [ ] **Step 3: Create the Slack allow-list env var**
+- [x] **Step 3: ~~Create the Slack allow-list env var~~ — dropped (2026-09-10)**
 
-In Slack, open your own profile → "..." menu → "Copy member ID". Then:
-
-```powershell
-[Environment]::SetEnvironmentVariable('VIGAN_SLACK_ALLOWED_USER_ID', '<paste your member ID here>', 'User')
-```
+Slack is dropped from scope (see Task 9). `VIGAN_SLACK_ALLOWED_USER_ID` was set and later unset twice as Slack was attempted and rolled back; no longer needed.
 
 - [ ] **Step 4: Create the login-start script**
 
@@ -1194,9 +1195,9 @@ n8n start
 
 Create a shortcut to this file inside the Windows Startup folder (`Win+R` → `shell:startup`) so n8n starts automatically at login. This is what satisfies "checks email only when the system is awake": n8n (and therefore the Email Watcher's Schedule Trigger) simply is not running when you are logged off or the machine is asleep.
 
-- [ ] **Step 5: Create the Slack app**
+- [x] **Step 5: ~~Create the Slack app~~ — dropped (2026-09-10)**
 
-At `api.slack.com/apps` → Create New App → From scratch → name it `VIGAN`. Under OAuth & Permissions, add Bot Token Scopes: `chat:write`, `im:history`, `im:read`, `users:read`. Enable Event Subscriptions (or Socket Mode, per your n8n Slack Trigger node's requirements) for `message.im`. Install the app to your workspace and copy the Bot User OAuth Token. In n8n, create a Slack credential named `Slack - VIGAN Bot` using that token.
+See Task 9 for why. A Slack app was created (twice — once on the company workspace, once on a private personal workspace) and the n8n credential/workflow rolled back both times.
 
 - [ ] **Step 6: Create the Anthropic credential**
 
@@ -1204,11 +1205,15 @@ In n8n, create an "Anthropic API" credential named `Anthropic - VIGAN` using you
 
 - [ ] **Step 7: Create the Gmail read-only credential**
 
-In Google Cloud Console, create an OAuth 2.0 Client ID restricted to the scope `https://www.googleapis.com/auth/gmail.readonly` only (do not grant send/modify/delete scopes). In n8n, create a Gmail credential named `Gmail - VIGAN Read Only`, connect it through that OAuth client, and confirm during the consent screen that only the read-only scope is being granted.
+Use your **personal** Google account for this (not your company/workspace account) — nothing about the OAuth setup requires a company account, and keeping it personal avoids any company IT policy question. In Google Cloud Console (signed in with your personal account), create an OAuth 2.0 Client ID restricted to the scope `https://www.googleapis.com/auth/gmail.readonly` only (do not grant send/modify/delete scopes). Note: an unverified/Testing-mode OAuth app's refresh token can expire after 7 days, requiring periodic re-authorization — acceptable for personal use, not worth pursuing Google's app verification process for. In n8n, create a Gmail credential named `Gmail - VIGAN Read Only`, connect it through that OAuth client, and confirm during the consent screen that only the read-only scope is being granted.
 
-- [ ] **Step 8: Build Tasks 6–10**
+- [ ] **Step 7b: Create the SMTP alert credential**
 
-With n8n running and all four credentials in place, build the four workflows described in Tasks 6, 7, 8, 9, and 10 in the n8n editor, in that order (each depends on the previous one existing).
+For Task 10 Step 5's email-to-self alert (replacing the originally-planned Slack alert). Using your personal email provider's SMTP settings (e.g. for personal Gmail: host `smtp.gmail.com`, port `587`, STARTTLS) with an **App Password** (Google requires this instead of your regular account password for SMTP when 2-Step Verification is enabled — generate one at your Google Account's Security settings → App Passwords). In n8n, create an "SMTP" credential named `SMTP - VIGAN Alerts`. Keep this entirely separate from the read-only Gmail API credential above — this credential only ever sends the one fixed alert email, it is not given to the AI agent as a tool.
+
+- [ ] **Step 8: Build Tasks 6, 7, 8, 10**
+
+With n8n running and credentials in place, build the workflows described in Tasks 6, 7, 8, and 10 in the n8n editor, in that order (each depends on the previous one existing). Task 9 (Slack) is dropped.
 
 - [ ] **Step 9: Write the setup doc**
 
@@ -1218,13 +1223,14 @@ Create `docs/vigan/setup.md` summarizing steps 1–8 above (so this doesn't need
 # VIGAN Phase 1 — Setup
 
 1. `npm install -g n8n` (standalone install; do not use the source checkout in `n8n/n8n`)
-2. Set env vars (User scope): `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, `VIGAN_SLACK_ALLOWED_USER_ID=<your Slack member ID>`
+2. Set env vars (User scope): `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`
 3. Put a shortcut to `vigan/start-n8n.bat` in `shell:startup` so n8n starts at login
-4. Slack app "VIGAN": bot scopes `chat:write, im:history, im:read, users:read`, subscribe to `message.im`, credential name `Slack - VIGAN Bot`
+4. Slack: dropped from scope (2026-09-10) — n8n's Slack Trigger needs a public webhook, blocked by this machine's corporate security policy on tunneling tools
 5. Anthropic credential: `Anthropic - VIGAN`
-6. Gmail credential (readonly scope only): `Gmail - VIGAN Read Only`
-7. Build workflows in order: `VIGAN Tool - Project Reader` → `VIGAN Agent Core` → `VIGAN - Chat` → `VIGAN - Slack` → `VIGAN - Email Watcher`
-8. Run `cd vigan && npm test` any time the CLI changes, before rebuilding the tool workflow
+6. Gmail credential (readonly scope only, personal Google account): `Gmail - VIGAN Read Only`
+7. SMTP credential for email-to-self alerts: `SMTP - VIGAN Alerts`
+8. Build workflows in order: `VIGAN Tool - Project Reader` → `VIGAN Agent Core` → `VIGAN - Chat` → `VIGAN - Email Watcher`
+9. Run `cd vigan && npm test` any time the CLI changes, before rebuilding the tool workflow
 ```
 
 - [ ] **Step 10: Commit**
