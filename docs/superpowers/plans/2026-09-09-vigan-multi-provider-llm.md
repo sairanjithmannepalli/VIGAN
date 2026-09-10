@@ -130,7 +130,7 @@ Connect: `Classify - Anthropic` (error) → `Parse Classification` (the same nod
 Add an **IF** node `Is Important` on `{{$json.important}}` **is true**. On the true branch, add a **Slack** node `Send Alert`:
 - **Credential**: `Slack - VIGAN Bot`
 - **Channel**: the DM channel with the allow-listed user
-- **Text**: `📧 Possibly important email from {{$json.from}}: "{{$json.subject}}" — {{$json.reason}}`
+- **Text**: `Possibly important email from {{$json.from}}: "{{$json.subject}}" — {{$json.reason}}` (no emoji — user preference)
 
 Leave the false branch unconnected.
 

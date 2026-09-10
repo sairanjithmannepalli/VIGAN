@@ -1009,33 +1009,40 @@ Save as `VIGAN Agent Core`. Leave it inactive (only invoked as a sub-workflow).
 
 ---
 
-### Task 8: n8n "VIGAN - Chat" workflow (local entry point)
+### Task 8: n8n "VIGAN - Chat" workflow (local entry point) — ✅ done (2026-09-10)
 
 **Depends on:** Task 7.
 
-- [ ] **Step 1: Create the workflow and trigger**
+- [x] **Step 1: Create the workflow and trigger**
 
 Create a new workflow named `VIGAN - Chat`. Add a **Chat Trigger** node (from the `@n8n/n8n-nodes-langchain` package). Leave it in its default "Hosted Chat" mode so it serves a local webchat UI.
 
-- [ ] **Step 2: Call the Agent Core**
+Confirmed actual Chat Trigger output fields: `action` ("sendMessage"), `sessionId`, `chatInput` — matches what this plan assumed.
 
-Add an **Execute Workflow** node named `Call Agent Core`:
-- **Workflow**: `VIGAN Agent Core` (Task 7)
-- **Input**: `sessionId` = `{{$json.sessionId}}`, `message` = `{{$json.chatInput}}` (these are the Chat Trigger's default output fields; verify against the Chat Trigger node's actual output in a test run and adjust field names if your version differs).
+- [x] **Step 2: Call the Agent Core**
 
-- [ ] **Step 3: Shape the chat response**
+Add an **Execute Workflow** node named `Call Agent Core` (search "Execute Workflow" specifically — searching just "Execute" can surface the unrelated Execute Command node instead):
+- **Source**: `Database`, **Workflow**: `VIGAN Agent Core` (Task 7)
 
-Add a **Set** node named `Format Chat Response` with a field `output` = `{{$json.reply}}` (the Chat Trigger's default expected response field is `output`; if the chat UI shows no reply after Step 4's test, open the Chat Trigger node's options for its configured response field name and rename this Set node's field to match).
+**Correction:** since `VIGAN Agent Core`'s trigger is left on "Accept All Data" (no explicit input fields defined), `Call Agent Core` shows no field-mapping UI — it just forwards whatever JSON reaches it wholesale. So a **`Prepare Input`** Set node was added *before* `Call Agent Core` (between it and the Chat Trigger) to reshape the data into exactly what Agent Core's internal expressions expect:
+- `sessionId` = `{{$json.sessionId}}`
+- `message` = `{{$json.chatInput}}`
 
-Connect: Chat Trigger → Call Agent Core → Format Chat Response.
+Connect: Chat Trigger → `Prepare Input` → `Call Agent Core`.
 
-- [ ] **Step 4: Activate and verify**
+- [x] **Step 3: Shape the chat response**
 
-Activate the workflow (toggle "Active"). Open the Chat Trigger node and click "Open Chat" to get the local chat URL. Send "what projects do you know about?" and confirm a reply listing all 11 registry projects appears in the chat UI.
+Add a **Set** node named `Format Chat Response` with a field `output` = `{{$json.reply}}` — confirmed `output` is the correct field name the Chat Trigger's UI looks for.
 
-- [ ] **Step 5: Save**
+Connect: `Call Agent Core` → `Format Chat Response`.
 
-Save as `VIGAN - Chat`.
+- [x] **Step 4: Publish and verify**
+
+n8n 2.x replaced the Active/Inactive toggle with a **Publish** button — click that instead. Open the Chat Trigger node and click "Open Chat" to get the local chat URL. Sent "what's the status of Product360?" and confirmed a correct, detailed reply describing real git status for that project.
+
+- [x] **Step 5: Save**
+
+Saved/published as `VIGAN - Chat`.
 
 ---
 
